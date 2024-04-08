@@ -1,14 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/deepak04112002/rssagg/internal/database"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
+
+	_ "github.com/go-sql-driver/mysql"
 )
+
+type apiConfig struct{
+	DB *database.Queries
+}
 
 func main(){
 	godotenv.Load(".env")
@@ -16,7 +25,23 @@ func main(){
 	if portString==""{
 		log.Fatal("PORT is not found in environment")
 	}
+	dbURL:=os.Getenv("DB_URL")
+	if dbURL==""{
+		log.Fatal("DB_URL is not found in environment")
+	}
+
+	conn,err:=sql.Open("mysql",dbURL);
+	if err!=nil{
+		log.Fatal("Cannot Connect to Database:",err)
+	}
     
+	db:=database.New(conn)
+	apiCfg := apiConfig{
+        DB: db,
+	}
+
+	go startScraping(db,10,time.Minute)
+
 	router :=chi.NewRouter()
 
 	router.Use(cors.Handler(cors.Options{
@@ -31,6 +56,14 @@ func main(){
 	v1Router:=chi.NewRouter()
 	v1Router.Get("/healthz",handleReadiness)
 	v1Router.Get("/err",handleErr)
+	v1Router.Post("/users",apiCfg.handleCreatedUser)
+	v1Router.Get("/users",apiCfg.middlewareAuth(apiCfg.handlerGetUser))
+	v1Router.Post("/feeds",apiCfg.middlewareAuth(apiCfg.handleCreateFeed))
+	v1Router.Get("/feeds",apiCfg.handleGetFeeds)
+	v1Router.Get("/posts",apiCfg.middlewareAuth(apiCfg.handlerGetPostForUser))
+	v1Router.Post("/feed_follows",apiCfg.middlewareAuth(apiCfg.handleCreateFeedFollow))
+	v1Router.Get("/feed_follows",apiCfg.middlewareAuth(apiCfg.handleGetFeedFollows))
+	v1Router.Delete("/feed_follows/{feedFollowID}",apiCfg.middlewareAuth(apiCfg.handleDeleteFeedFollow))
 
 	router.Mount("/v1",v1Router)
 
@@ -42,7 +75,7 @@ func main(){
 		w.Write([]byte("Hello"))
 	})
 	log.Printf("Server started at %v",portString)
-	err:=srv.ListenAndServe()
+	err=srv.ListenAndServe()
 	if err!=nil{
 		log.Fatal(err)
 	}
